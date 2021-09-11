@@ -81,7 +81,7 @@ class BaseNode(VnodeObject):
             raise VnodeError("Failed to link with network.")
         self.network.task(self.__respond__(msg))
     
-    def link(self, net: "BaseNetwork") -> None:
+    def join(self, net: "BaseNetwork") -> None:
         self.network = net
     
     def copy(self, connections: List[str], network: "BaseNetwork") -> "BaseNode":
@@ -110,7 +110,7 @@ class BaseNetwork(VnodeObject):
     ) -> None:
         self.nodes = OrderedDict()
         for n in nodes:
-            n.link(self)
+            n.join(self)
             self.nodes[n.name] = n
         
         self.activated = False
