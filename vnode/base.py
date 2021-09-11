@@ -7,7 +7,7 @@ from typing import OrderedDict as T_OrderedDict
 from exceptions import *
 
 class VnodeObject:
-    ...
+    __slots__ = []
 
 class BaseMessage(VnodeObject):
     
