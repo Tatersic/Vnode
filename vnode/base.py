@@ -24,6 +24,12 @@ class BaseMessage(VnodeObject):
             raise VnodeError("Failed to link with network.")
         net.send(receiver, self)
     
+    async def aio_send(self, receiver: str, *, net: Optional["BaseNetwork"] = None) -> None:
+        net = net or self.owner.network
+        if not net:
+            raise VnodeError("Failed to link with network.")
+        await net[receiver].__respond__(self)
+    
     def __str__(self) -> str:
         return f"{self.__class__.__qualname__}({self.data},from={self.owner})"
 
@@ -49,10 +55,17 @@ class InputMessage(BaseMessage):
 
 class NetwortInitedMessage(BaseMessage):
 
-    __slots__ = ["network"]
+    __slots__ = ["network", "lock", "uninit"]
 
-    def __init__(self, net: "BaseNetwork") -> None:
+    def __init__(
+        self,
+        net: "BaseNetwork", 
+        lock: asyncio.Lock, 
+        uninit: List[str]
+    ) -> None:
         self.network = net
+        self.lock = lock
+        self.uninit = uninit
     
     def __str__(self) -> str:
         return f"{self.__class__.__qualname__}({self.network})"
@@ -61,20 +74,24 @@ class _OnMessage:
     
     __slots__ = ["func", "message"]
 
-    def __init__(self, func: Callable[[BaseMessage], Any], message: Type[BaseMessage]) -> None:
+    def __init__(self, func: Callable[["BaseNode", BaseMessage], Any], message: Type[BaseMessage]) -> None:
         if not asyncio.iscoroutinefunction(func):
             @wraps(func)
-            async def wrapper(msg: BaseMessage):
-                return func(msg)
-            self.func = wraps
+            async def wrapper(node: BaseNode, msg: BaseMessage):
+                return func(node, msg)
+            self.func = wrapper
         else:
             self.func = func
         self.message = message
 
 def on_message(msg: Type[BaseMessage]) -> Callable[[Callable], _OnMessage]:
-    def wrapper(func: Callable[[BaseMessage], Any]) -> _OnMessage:
+    def wrapper(func: Callable[["BaseNode", BaseMessage], Any]) -> _OnMessage:
         return _OnMessage(func, msg)
     return wrapper
+
+async def _wait_lock(func: Coroutine, lock: asyncio.Lock) -> Any:
+    await lock.acquire()
+    await func
 
 class NodeMeta(type):
 
@@ -83,12 +100,13 @@ class NodeMeta(type):
     def __new__(cls, name: str, bases: tuple, attrs: Dict[str, Any]):
         if "__message__" in attrs:
             raise VnodeError("Invalid attribute '__message__'")
-        attrs["__message__"] = {}
+        n_attrs = {"__message__":{}}
         for n, m in attrs.items():
             if isinstance(m, _OnMessage):
-                attrs["__message__"][(m.message,)] = m.func
-                del attrs[n]
-        return type.__new__(cls, name, bases, attrs)
+                n_attrs["__message__"][(m.message,)] = m.func
+            else:
+                n_attrs[n] = m
+        return type.__new__(cls, name, bases, n_attrs)
 
     def _get_message_handler(self, msg: BaseMessage) -> Optional[Callable]:
         return self.__message__.get((type(msg),), None)
@@ -110,13 +128,8 @@ class BaseNode(VnodeObject, metaclass=NodeMeta):
     
     async def __respond__(self, msg: BaseMessage) -> None:
         logger.info(f"require recieve: {msg}")
-        handler = self.__class__._get_message_handler(msg)
-        if handler:
-            await handler(msg)
-        else:...
-            #raise InvalidMessageError(f"node {self} failed to receive message {msg}", message=msg)
         self.deliver(msg)
-    
+        
     def deliver(self, data: BaseMessage) -> None:
         for rev in self.connections:
             data.send(rev)
@@ -167,8 +180,10 @@ class BaseNetwork(VnodeObject):
     
     def _init(self, first_task: Optional[Coroutine] = None) -> None:
         self.activated = True
+        lock = asyncio.Lock()
+        l = list(self.nodes.keys())
         for n in self.nodes.values():
-            self.task(n.__respond__(NetwortInitedMessage(self)))
+            self.task(n.__respond__(NetwortInitedMessage(self, lock, l)))
         if first_task:
             self.task(first_task)
         self.loop.run_forever()

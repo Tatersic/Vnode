@@ -20,11 +20,22 @@ class Port(VnodeObject):
         else:
             self.name = id_or_name.name
             self.id = id_or_name.id
+        if node:
+            self.complement(node)
         super().__init__()
+    
+    def __eq__(self, other: "T_Port") -> bool:
+        oth = Port(other)
+        if self.id != None and oth.id != None:
+            return self.id == oth.id
+        elif self.name != None and oth.name != None:
+            return self.name == oth.name
+        else:
+            return False
     
     def complement(self, node) -> None:
         ports: list = node.ports
-        if not self.name:
+        if (not self.name) and self.id != None:
             self.name = ports[self.id]
         else:
             self.id = ports.index(self.name)
@@ -43,10 +54,10 @@ class ConnectionRequestMessage(BaseMessage):
         if isinstance(port, Port):
             self.port = port
         else:
-            self.port = Port(port)
+            self.port = Port(port, node=owner)
         self.owner = owner
 
-class PreconnectionMessage(BaseMessage):
+class ConfirmConnectionMessage(BaseMessage):
     """
     To confirm the connection. 
     Make sure the node can send currect message to 
@@ -94,6 +105,7 @@ __all__ = [
     "Message",
     "InputMessage",
     "ConnectionRequestMessage",
+    "ConfirmConnectionMessage",
     "PullRequestMessage",
     "Port",
     "T_Port"

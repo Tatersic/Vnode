@@ -18,10 +18,10 @@ class Node(BaseNode):
     def __init__(
         self,
         name: str,
-        connections: Dict[str, T_Port], 
-        *,
+        connections: Dict[str, T_Port] = {}, 
         requests: Dict[str, T_Port] = {},
-        network: Optional[BaseNetwork]
+        *,
+        network: Optional[BaseNetwork] = None
     ) -> None:
         self.name       = name
         self.requests   = {k:Port(v) for k,v in requests.items()}
@@ -30,21 +30,56 @@ class Node(BaseNode):
         self.network    = network
         self.pull_message_cache: Set[PullRequestMessage] = set()
 
+    async def __respond__(self, msg: BaseMessage) -> None:
+        handler = self.__class__._get_message_handler(msg)
+        if handler:
+            ans = await handler(self, msg)
+            if not ("return" in handler.__annotations__ and handler.__annotations__.get("return", None) == None):
+                self.deliver(ans)
+        else:
+            raise InvalidMessageError(f"node {self} failed to receive message {msg}", message=msg)
+            
     @on_message(NetwortInitedMessage)
-    def __respond_netinit(self, msg: NetwortInitedMessage) -> None:
+    async def __respond_netinit(self, msg: NetwortInitedMessage) -> None:
         self.network = msg.network
+        if not msg.lock.locked():
+            await msg.lock.acquire()
+
         if not self.requests:
             return
         for node, port in self.requests.items():
             c_msg = ConnectionRequestMessage(self, port)
-            c_msg.send(node)
+            await c_msg.aio_send(node)
+        for node, port in self.connections.items():
+            c_msg = ConfirmConnectionMessage(self, port)
+            await c_msg.aio_send(node)
+        
+        msg.uninit.remove(self.name)
+        if not msg.uninit:
+            msg.lock.release()
+    
+    @on_message(ConnectionRequestMessage)
+    def __respond_connection(self, msg: ConnectionRequestMessage) -> None:
+        node: str = msg.owner.name
+        if node in self.connections and self.connections[node] != msg.port:
+            raise VnodeError("Unmatch connection port.")
+        else:
+            self.connections[node] = msg.port
+    
+    @on_message(ConfirmConnectionMessage)
+    def __respond_confirm_connection(self, msg: ConfirmConnectionMessage) -> None:
+        node: str = msg.owner.name
+        if node in self.requests and self.requests[node] != msg.port:
+            raise VnodeError("Unmatch connection port.")
+        else:
+            self.requests[node] = msg.port
     
     @on_message(InputMessage)
     async def __respond_input(self, msg: InputMessage) -> Any:
         return await msg.aio_bind(self.__run__)
     
     @on_message(PullRequestMessage)
-    def __respond_pull_requset(self, msg: PullRequestMessage) -> None :
+    def __respond_pull_requset(self, msg: PullRequestMessage) -> None:
         self.pull_message_cache.add(msg)
     
     @on_message(Message)
@@ -52,7 +87,9 @@ class Node(BaseNode):
         data = msg.data
         msg.port.complement(self)
 
-        if len(self.ports) == 1:
+        if self.ports[0] == "@void":
+            return await self.__run__()
+        elif len(self.ports) == 1:
             return await self.__run__(data)
         else:
             param_queue = asyncio.Queue(len(self.ports) - 1)
@@ -80,6 +117,7 @@ class Node(BaseNode):
             return
         for n, p in self.connections.items():
             msg = Message(self, Port(p), data=data)
+            print(msg)
             for request in self.pull_message_cache:
                 if n == request.owner.name:
                     request.append(msg)
@@ -90,6 +128,8 @@ class Node(BaseNode):
     def set_ops(self, ops: Callable) -> None:
         sig = signature(ops).parameters
         self.ports = [n for n in sig if n != "return"]
+        if not self.ports:
+            self.ports.append("@void")
         self.ops = ops
 
     async def __run__(self, *args, **kwds):
@@ -105,3 +145,10 @@ class StaticNode(BaseNode):
     """
 
     __slots__ = []
+
+def node(name: str, connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> Callable[[Callable], Node]:
+    n = Node(name, connections, requests)
+    def wrapper(ops: Callable) -> Node:
+        n.set_ops(ops)
+        return n
+    return wrapper
