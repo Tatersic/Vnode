@@ -1,9 +1,10 @@
 import asyncio
 from functools import wraps
 from collections import OrderedDict
-from typing import Any, Callable, Coroutine, Dict, Iterable, List, NoReturn, Optional, Type, Union, overload
+from typing import Any, Callable, Coroutine, Dict, Iterable, List, NoReturn, Optional, Tuple, Type, Union, overload
 from typing import OrderedDict as T_OrderedDict
 
+from log import *
 from exceptions import *
 
 class VnodeObject:
@@ -40,13 +41,13 @@ class InputMessage(BaseMessage):
     def bind(self, func: Callable) -> Any:
         return func(*self.args, **self.kwds)
     
+    async def aio_bind(self, func: Callable) -> Any:
+        return await func(*self.args, **self.kwds)
+    
     def __str__(self) -> str:
         return f"{self.__class__.__qualname__}({self.args},{self.kwds})"
 
-class BaseEvent(BaseMessage):
-    ...
-
-class NetwortInitedEvent(BaseEvent):
+class NetwortInitedMessage(BaseMessage):
 
     __slots__ = ["network"]
 
@@ -56,7 +57,43 @@ class NetwortInitedEvent(BaseEvent):
     def __str__(self) -> str:
         return f"{self.__class__.__qualname__}({self.network})"
 
-class BaseNode(VnodeObject):
+class _OnMessage:
+    
+    __slots__ = ["func", "message"]
+
+    def __init__(self, func: Callable[[BaseMessage], Any], message: Type[BaseMessage]) -> None:
+        if not asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def wrapper(msg: BaseMessage):
+                return func(msg)
+            self.func = wraps
+        else:
+            self.func = func
+        self.message = message
+
+def on_message(msg: Type[BaseMessage]) -> Callable[[Callable], _OnMessage]:
+    def wrapper(func: Callable[[BaseMessage], Any]) -> _OnMessage:
+        return _OnMessage(func, msg)
+    return wrapper
+
+class NodeMeta(type):
+
+    __message__: Dict[Tuple[Type[BaseMessage]], Callable[[BaseMessage], Any]]
+
+    def __new__(cls, name: str, bases: tuple, attrs: Dict[str, Any]):
+        if "__message__" in attrs:
+            raise VnodeError("Invalid attribute '__message__'")
+        attrs["__message__"] = {}
+        for n, m in attrs.items():
+            if isinstance(m, _OnMessage):
+                attrs["__message__"][(m.message,)] = m.func
+                del attrs[n]
+        return type.__new__(cls, name, bases, attrs)
+
+    def _get_message_handler(self, msg: BaseMessage) -> Optional[Callable]:
+        return self.__message__.get((type(msg),), None)
+
+class BaseNode(VnodeObject, metaclass=NodeMeta):
 
     __slots__ = ["name", "connections", "network"]
 
@@ -72,9 +109,17 @@ class BaseNode(VnodeObject):
         self.network = network
     
     async def __respond__(self, msg: BaseMessage) -> None:
-        print(f"require recieve: {msg}")
+        logger.info(f"require recieve: {msg}")
+        handler = self.__class__._get_message_handler(msg)
+        if handler:
+            await handler(msg)
+        else:...
+            #raise InvalidMessageError(f"node {self} failed to receive message {msg}", message=msg)
+        self.deliver(msg)
+    
+    def deliver(self, data: BaseMessage) -> None:
         for rev in self.connections:
-            msg.send(rev)
+            data.send(rev)
     
     def respond(self, msg: BaseMessage) -> None:
         if not self.network:
@@ -123,7 +168,7 @@ class BaseNetwork(VnodeObject):
     def _init(self, first_task: Optional[Coroutine] = None) -> None:
         self.activated = True
         for n in self.nodes.values():
-            self.task(n.__respond__(NetwortInitedEvent(self)))
+            self.task(n.__respond__(NetwortInitedMessage(self)))
         if first_task:
             self.task(first_task)
         self.loop.run_forever()
@@ -161,6 +206,7 @@ class BaseNetwork(VnodeObject):
             return node in self.nodes.values()
 
 if __name__ == "__main__":
+    logger.setLevel(INFO)
     node = BaseNode("HelloWorld")
     net = BaseNetwork(node)
     v = net["HelloWorld"]
