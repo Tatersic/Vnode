@@ -128,12 +128,7 @@ class BaseNode(VnodeObject, metaclass=NodeMeta):
     
     async def __respond__(self, msg: BaseMessage) -> None:
         logger.info(f"require recieve: {msg}")
-        self.deliver(msg)
         
-    def deliver(self, data: BaseMessage) -> None:
-        for rev in self.connections:
-            data.send(rev)
-    
     def respond(self, msg: BaseMessage) -> None:
         if not self.network:
             raise VnodeError("Failed to link with network.")

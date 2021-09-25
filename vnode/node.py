@@ -93,8 +93,8 @@ class Node(BaseNode):
             return await self.__run__(data)
         else:
             param_queue = asyncio.Queue(len(self.ports) - 1)
-            l_arg: Dict[str, Message] = {}
-            for node in (p for p in self.ports if p != msg.port.name):
+            l_arg: Dict[str, Message] = {msg.port.name: msg}
+            for node, port in {k:v for k, v in self.requests.items() if v != msg.port}.items():
                 m = PullRequestMessage(self, param_queue)
                 m.send(node)
 
@@ -106,7 +106,7 @@ class Node(BaseNode):
                     raise VnodeError("unclear input to {0}")
                 l_arg[port.name] = rec
 
-                if set(l_arg.keys()) == set(self.ports):
+                if len(l_arg) == len(self.ports):
                     break
             
             arguments = {k:v.data for k, v in l_arg.items()}
@@ -117,19 +117,20 @@ class Node(BaseNode):
             return
         for n, p in self.connections.items():
             msg = Message(self, Port(p), data=data)
-            print(msg)
             for request in self.pull_message_cache:
                 if n == request.owner.name:
                     request.append(msg)
                     break
             else:
-                super().deliver(msg)
+                msg.send(n)
     
     def set_ops(self, ops: Callable) -> None:
         sig = signature(ops).parameters
         self.ports = [n for n in sig if n != "return"]
         if not self.ports:
             self.ports.append("@void")
+        for p in self.requests.values():
+            p.complement(self)
         self.ops = ops
 
     async def __run__(self, *args, **kwds):
