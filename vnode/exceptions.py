@@ -7,6 +7,14 @@ class VnodeError(Exception):
 
     __slots__ = []
 
+class VnodeValueError(VnodeError):
+
+    __slots__ = ["node"]
+
+    def __init__(self, *args: object, node=None) -> None:
+        self.node  = node
+        super().__init__(*args)
+
 class InvalidMessageError(VnodeError):
     """
     When a node reveive the message which cannot be handled,

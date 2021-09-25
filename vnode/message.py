@@ -71,6 +71,17 @@ class ConfirmConnectionMessage(BaseMessage):
             self.port = Port(port)
         self.owner = owner
 
+class PullRequestMessage(BaseMessage):
+    """
+    Be sent when a node is activated but does not have data
+    required. The node will be hung up till all the data ready.
+    """
+
+    __slots__ = []
+
+    def __init__(self, owner: "BaseNode") -> None:
+        self.owner = owner
+    
 class Message(BaseMessage):
     """
     Input from other node.
@@ -90,6 +101,7 @@ __all__ = [
     "InputMessage",
     "ConnectionRequestMessage",
     "ConfirmConnectionMessage",
+    "PullRequestMessage",
     "Port",
     "T_Port"
 ]

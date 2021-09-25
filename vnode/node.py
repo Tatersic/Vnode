@@ -24,8 +24,8 @@ class Node(BaseNode):
     ) -> None:
         self.name       = name
         self.requests   = {k:Port(v) for k,v in requests.items()}
-        self.connections = {k:Port(v) for k,v in connections.items()}
-        #self.connections= connections
+        self.connections= {k:Port(v) for k,v in connections.items()}
+
         self.network    = network
         self.data_cache: Dict[str, Deque[Any]] = defaultdict(deque)
 
@@ -64,6 +64,7 @@ class Node(BaseNode):
             raise VnodeError("Unmatch connection port.")
         else:
             self.connections[node] = msg.port
+            msg.port.complement(self)
     
     @on_message(ConfirmConnectionMessage)
     def __respond_confirm_connection(self, msg: ConfirmConnectionMessage) -> None:
@@ -72,6 +73,10 @@ class Node(BaseNode):
             raise VnodeError("Unmatch connection port.")
         else:
             self.requests[node] = msg.port
+    
+    @on_message(PullRequestMessage)
+    def __respond_pull_request(self, msg: PullRequestMessage) -> None:
+        pass
     
     @on_message(InputMessage)
     async def __respond_input(self, msg: InputMessage) -> Any:
@@ -88,8 +93,12 @@ class Node(BaseNode):
             return await self.__run__(msg.data)
         else:
             self.data_cache[port.name].appendleft(msg.data)
+            for n, p in self.requests.items():
+                if not self.data_cache[p.name]:
+                    m = PullRequestMessage(self)
+                    await m.aio_send(n)
             if len(self.data_cache) == len(self.ports) and all((self.data_cache.values())):
-                await self.__run__(**{k:v.pop() for k, v in self.data_cache.items()})
+                return await self.__run__(**{k:v.pop() for k, v in self.data_cache.items()})
     
     def deliver(self, data: Any) -> None:
         if not self.connections:
@@ -113,13 +122,51 @@ class Node(BaseNode):
         else:
             return self.ops(*args, **kwds)
 
-class StaticNode(BaseNode):
+class StaticNode(Node):
     """
     The kind of nodes is usually used to store some data.
     When request is received, data will be directly sent out.
     """
 
-    __slots__ = []
+    __slots__ = ["data"]
+
+    def __init__(
+        self,
+        name: str,
+        requests: Dict[str, T_Port] = {},
+        *,
+        network: Optional[BaseNetwork] = None,
+        data: Any = None
+    ) -> None:
+        self.name       = name
+        self.requests   = {k:Port(v) for k,v in requests.items()}
+        self.connections= {}
+
+        self.network    = network
+        self.data       = data
+    
+    @on_message(ConnectionRequestMessage)
+    def __respond_connection(self, msg: ConnectionRequestMessage) -> None:
+        pass
+    
+    @on_message(PullRequestMessage)
+    def __respond_pull_request(self, msg: PullRequestMessage) -> None:
+        node = msg.owner
+        port: Port = node.requests[self.name]
+        node.data_cache[port.name].appendleft(self.data)
+
+    @on_message(InputMessage)
+    def __respond_input(self, msg: InputMessage) -> None:
+        if len(msg.args) != 1 or msg.kwds:
+            raise VnodeError("Static node only have one port.")
+        self.data = msg.args[0]
+    
+    @on_message(Message)
+    async def __respond_message(self, msg: Message) -> None:
+        self.data = msg.data
+    
+    def deliver(self, data: Any) -> None:
+        pass
 
 def node(name: str, connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> Callable[[Callable], Node]:
     n = Node(name, connections, requests)

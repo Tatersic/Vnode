@@ -101,6 +101,9 @@ class NodeMeta(type):
         if "__message__" in attrs:
             raise VnodeError("Invalid attribute '__message__'")
         n_attrs = {"__message__":{}}
+        if name != "BaseNode":
+            for node in bases:
+                n_attrs["__message__"].update(node.__message__)
         for n, m in attrs.items():
             if isinstance(m, _OnMessage):
                 n_attrs["__message__"][(m.message,)] = m.func
@@ -199,6 +202,8 @@ class BaseNetwork(VnodeObject):
 
     def __getitem__(self, key: Union[int, str]) -> BaseNode:
         if isinstance(key, str):
+            if key not in self.nodes:
+                raise VnodeError(f"node {key} is not in network {self}.")
             return self.nodes[key]
         else:
             return list(self.nodes.values())[key]
