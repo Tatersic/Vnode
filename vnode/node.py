@@ -1,8 +1,7 @@
-import asyncio
-import sys
+from collections import deque, defaultdict
 from inspect import signature
 from asyncio.coroutines import iscoroutinefunction
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Deque
 
 from base import VnodeObject, BaseNode, BaseNetwork, BaseMessage, NetwortInitedMessage, on_message
 from message import *
@@ -13,7 +12,7 @@ class Node(BaseNode):
     Normal nodes which we used.
     """
 
-    __slots__ = ["requests", "ops", "ports", "pull_message_cache"]
+    __slots__ = ["requests", "ops", "ports", "data_cache"]
 
     def __init__(
         self,
@@ -28,7 +27,7 @@ class Node(BaseNode):
         self.connections = {k:Port(v) for k,v in connections.items()}
         #self.connections= connections
         self.network    = network
-        self.pull_message_cache: Set[PullRequestMessage] = set()
+        self.data_cache: Dict[str, Deque[Any]] = defaultdict(deque)
 
     async def __respond__(self, msg: BaseMessage) -> None:
         handler = self.__class__._get_message_handler(msg)
@@ -78,51 +77,26 @@ class Node(BaseNode):
     async def __respond_input(self, msg: InputMessage) -> Any:
         return await msg.aio_bind(self.__run__)
     
-    @on_message(PullRequestMessage)
-    def __respond_pull_requset(self, msg: PullRequestMessage) -> None:
-        self.pull_message_cache.add(msg)
-    
     @on_message(Message)
     async def __respond_message(self, msg: Message) -> Any:
-        data = msg.data
-        msg.port.complement(self)
+        port = msg.port
+        port.complement(self)
 
         if self.ports[0] == "@void":
             return await self.__run__()
         elif len(self.ports) == 1:
-            return await self.__run__(data)
+            return await self.__run__(msg.data)
         else:
-            param_queue = asyncio.Queue(len(self.ports) - 1)
-            l_arg: Dict[str, Message] = {msg.port.name: msg}
-            for node, port in {k:v for k, v in self.requests.items() if v != msg.port}.items():
-                m = PullRequestMessage(self, param_queue)
-                m.send(node)
-
-            while True:
-                rec: Message = await param_queue.get()
-                port = rec.port
-                port.complement(self)
-                if port.name in l_arg:
-                    raise VnodeError("unclear input to {0}")
-                l_arg[port.name] = rec
-
-                if len(l_arg) == len(self.ports):
-                    break
-            
-            arguments = {k:v.data for k, v in l_arg.items()}
-            return await self.__run__(**arguments)
+            self.data_cache[port.name].appendleft(msg.data)
+            if len(self.data_cache) == len(self.ports) and all((self.data_cache.values())):
+                await self.__run__(**{k:v.pop() for k, v in self.data_cache.items()})
     
     def deliver(self, data: Any) -> None:
         if not self.connections:
             return
         for n, p in self.connections.items():
             msg = Message(self, Port(p), data=data)
-            for request in self.pull_message_cache:
-                if n == request.owner.name:
-                    request.append(msg)
-                    break
-            else:
-                msg.send(n)
+            msg.send(n)
     
     def set_ops(self, ops: Callable) -> None:
         sig = signature(ops).parameters

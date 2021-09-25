@@ -1,4 +1,3 @@
-from asyncio import Queue
 from typing import List, Union, Optional, Any, TypeVar
 
 from base import VnodeObject, BaseMessage, InputMessage, BaseNode
@@ -72,21 +71,6 @@ class ConfirmConnectionMessage(BaseMessage):
             self.port = Port(port)
         self.owner = owner
 
-class PullRequestMessage(BaseMessage):
-    """
-    Be sent when a node is activated but does not have data
-    required. The node will be hung up till all the data ready.
-    """
-
-    __slots__ = ["l_param"]
-
-    def __init__(self, owner: "BaseNode", l_param: Queue) -> None:
-        self.l_param = l_param
-        self.owner = owner
-    
-    def append(self, data: "Message") -> None:
-        self.l_param.put_nowait(data)
-    
 class Message(BaseMessage):
     """
     Input from other node.
@@ -106,7 +90,6 @@ __all__ = [
     "InputMessage",
     "ConnectionRequestMessage",
     "ConfirmConnectionMessage",
-    "PullRequestMessage",
     "Port",
     "T_Port"
 ]
