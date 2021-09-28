@@ -1,6 +1,7 @@
 from typing import List, Union, Optional, Any, TypeVar
 
 from base import VnodeObject, BaseMessage, InputMessage, BaseNode
+from exceptions import VnodeError
 
 class Port(VnodeObject):
 
@@ -34,10 +35,19 @@ class Port(VnodeObject):
     
     def complement(self, node) -> None:
         ports: list = node.ports
-        if (not self.name) and self.id != None:
-            self.name = ports[self.id]
+        try:
+            if (not self.name) and self.id != None:
+                self.name = ports[self.id]
+            else:
+                self.id = ports.index(self.name)
+        except (ValueError, IndexError):
+            raise VnodeError(f"{self} cannot match {node.ports}")
+    
+    def __str__(self) -> str:
+        if self.name == None:
+            return f"<node port {self.id}>"
         else:
-            self.id = ports.index(self.name)
+            return f"<node port {self.name}>"
 
 T_Port = TypeVar("T_Port", Port, int, str)
 

@@ -44,8 +44,6 @@ class Node(BaseNode):
         if not msg.lock.locked():
             await msg.lock.acquire()
 
-        if not self.requests:
-            return
         for node, port in self.requests.items():
             c_msg = ConnectionRequestMessage(self, port)
             await c_msg.aio_send(node)
@@ -64,7 +62,6 @@ class Node(BaseNode):
             raise VnodeError("Unmatch connection port.")
         else:
             self.connections[node] = msg.port
-            msg.port.complement(self)
     
     @on_message(ConfirmConnectionMessage)
     def __respond_confirm_connection(self, msg: ConfirmConnectionMessage) -> None:
@@ -73,6 +70,7 @@ class Node(BaseNode):
             raise VnodeError("Unmatch connection port.")
         else:
             self.requests[node] = msg.port
+            msg.port.complement(self)
     
     @on_message(PullRequestMessage)
     def __respond_pull_request(self, msg: PullRequestMessage) -> None:
@@ -117,6 +115,9 @@ class Node(BaseNode):
         self.ops = ops
 
     async def __run__(self, *args, **kwds):
+        sig = signature(self.ops).parameters
+        if sig and list(sig.keys())[0] == "node_self" and sig["node_self"] == self.__class__:
+            args = (self, *args)
         if iscoroutinefunction(self.ops):
             return await self.ops(*args, **kwds)
         else:
