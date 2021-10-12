@@ -308,7 +308,7 @@ class BaseNode(VnodeObject, metaclass=NodeMeta):
         self.network = net
         return self
     
-    def copy(self, network: "BaseNetwork", connections: List[str] = []) -> "BaseNode":
+    def copy(self, network: Optional["BaseNetwork"], connections: List[str] = []) -> "BaseNode":
         return BaseNode(self.name, connections, network=network)
     
     def __call__(self, *args: Any, **kwds: Any) -> None:
@@ -429,7 +429,7 @@ class Node(BaseNode):
     
     def copy(
         self,
-        network: "Network",
+        network: Optional["Network"],
         connections: Dict[str, T_Port] = {}, 
         requests: Dict[str, T_Port] = {}
     ) -> "Node":
@@ -543,7 +543,7 @@ class StaticNode(Node):
     
     def copy(
         self,
-        network: "Network",
+        network: Optional["Network"],
         connections: Dict[str, T_Port] = {}
     ) -> "StaticNode":
         n_node = self.__class__(
@@ -561,7 +561,7 @@ class StaticNode(Node):
     def deliver(self, data: Any) -> None:
         pass
 
-    def set_ops(self, ops: Callable) -> None:
+    def set_ops(self, ops: Callable) -> NoReturn:
         raise VnodeValueError("Static node needs no operator.", node=self)
 
 class ListenerNode(Node):
@@ -594,16 +594,16 @@ class ListenerNode(Node):
     def __respond_message(self, msg: Message) -> None:
         raise VnodeValueError("Listener cannot be connected.", node=self)
     
-    async def __run__(self, event: BaseEvent) -> None:
-        ans = await super().__run__(event)
-        self.deliver(ans)
-    
-    def copy(self, network: "Network", connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "ListenerNode":
+    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "ListenerNode":
         if requests:
             raise VnodeValueError("")
         n_node: ListenerNode = super().copy(network, connections=connections, requests=requests)
         n_node.event = self.event
         return n_node
+
+    async def __run__(self, event: BaseEvent) -> None:
+        ans = await super().__run__(event)
+        self.deliver(ans)
 
 class NodeGroup(Node):
 
@@ -640,6 +640,15 @@ class NodeGroup(Node):
     def set_ops(self, ops: Callable) -> NoReturn:
         raise VnodeValueError("Node group needs no operator.", node=self)
     
+    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "NodeGroup":
+        n_node: NodeGroup = super().copy(network, connections=connections, requests=requests)
+        l_sn = []
+        for n in self.subordinate_nodes.values():
+            ns_node = n.copy(None, n.connections, n.requests)
+            l_sn.append(ns_node)
+        n_node.add_nodes(*l_sn)
+        return n_node
+
     async def __run__(self, *args, **kwds) -> Any:
         data = {}
         for k, v in zip(self.ports, args):
@@ -660,14 +669,14 @@ class NodeGroupPort(ListenerNode):
         self.id = id
         super().__init__(name, NodeGroupStartingEvent, network=network)
 
-    async def __run__(self, event: NodeGroupStartingEvent) -> None:
-        data = event.data[self.name]
-        await super().__run__(data)
-    
-    def copy(self, network: "Network", connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "NodeGroupPort":
+    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "NodeGroupPort":
         n_node: NodeGroupPort = super().copy(network, connections=connections, requests=requests)
         n_node.id = self.id
         return n_node
+
+    async def __run__(self, event: NodeGroupStartingEvent) -> None:
+        data = event.data[self.name]
+        await super().__run__(data)
 
 """
 ========================================================
