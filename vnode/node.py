@@ -639,7 +639,7 @@ class NodeGroup(Node):
     
     def set_ops(self, ops: Callable) -> NoReturn:
         raise VnodeValueError("Node group needs no operator.", node=self)
-
+    
     async def __run__(self, *args, **kwds) -> Any:
         data = {}
         for k, v in zip(self.ports, args):
