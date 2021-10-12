@@ -10,10 +10,10 @@ from typing import (Any, Callable, Coroutine, Deque, Dict, Generator, Iterable, 
                     NoReturn, Optional)
 from typing import OrderedDict as T_OrderedDict
 from typing import DefaultDict
-from typing import Tuple, Type, TypeVar, Union, overload
+from typing import Tuple, Type, TypeVar, Union
 
-from exceptions import *
-from log import *
+from .exceptions import *
+from .log import *
 
 NODE_OPS_SELF_REF: str = "node_self"
 RE_NODE_NAME = re.compile(r"^[a-zA-Z\_][0-9a-zA-Z\_]*(\.[a-zA-Z\_][0-9a-zA-Z\_]*)*$")
@@ -76,7 +76,7 @@ class InputMessage(BaseMessage):
     def __str__(self) -> str:
         return f"{self.__class__.__qualname__}({self.args},{self.kwds})"
 
-class NetwortInitedMessage(BaseMessage):
+class NetworkInitedMessage(BaseMessage):
 
     __slots__ = ["network", "lock", "uninit"]
 
@@ -356,8 +356,9 @@ class Node(BaseNode):
                 ans = await handler(self, msg)
             except NodeTerminatedError:
                 pass
-            except:
+            except VnodeError:
                 raise
+            except:
                 event = ExceptionRaisedEvent(self, *sys.exc_info()[1:])
                 self.broadcast(event)
             else:
@@ -366,8 +367,8 @@ class Node(BaseNode):
         else:
             raise InvalidMessageError(f"Node {self} failed to receive message {msg}", message=msg)
             
-    @on_message(NetwortInitedMessage)
-    async def __respond_netinit(self, msg: NetwortInitedMessage) -> None:
+    @on_message(NetworkInitedMessage)
+    async def __respond_netinit(self, msg: NetworkInitedMessage) -> None:
         self.network = msg.network
         if not msg.lock.locked():
             await msg.lock.acquire()
@@ -573,10 +574,11 @@ class ListenerNode(Node):
         event: Type[BaseEvent],
         connections: Dict[str, T_Port] = {}, 
         *, 
-        network: Optional["BaseNetwork"] = None
+        network: Optional["Network"] = None,
+        model: bool = False
     ) -> None:
         self.event = event
-        super().__init__(name, connections=connections, network=network)
+        super().__init__(name, connections=connections, network=network, model=model)
     
     async def __respond__(self, msg: BaseMessage) -> None:
         if isinstance(msg, BaseEvent) or issubclass(msg.__class__, BaseEvent):
@@ -595,6 +597,13 @@ class ListenerNode(Node):
     async def __run__(self, event: BaseEvent) -> None:
         ans = await super().__run__(event)
         self.deliver(ans)
+    
+    def copy(self, network: "Network", connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "ListenerNode":
+        if requests:
+            raise VnodeValueError("")
+        n_node: ListenerNode = super().copy(network, connections=connections, requests=requests)
+        n_node.event = self.event
+        return n_node
 
 class NodeGroup(Node):
 
@@ -628,7 +637,7 @@ class NodeGroup(Node):
         if hasattr(self, "ins_network"):
             self.ins_network.add(*nodes)
     
-    def set_ops(self, ops: Callable) -> None:
+    def set_ops(self, ops: Callable) -> NoReturn:
         raise VnodeValueError("Node group needs no operator.", node=self)
 
     async def __run__(self, *args, **kwds) -> Any:
@@ -654,6 +663,11 @@ class NodeGroupPort(ListenerNode):
     async def __run__(self, event: NodeGroupStartingEvent) -> None:
         data = event.data[self.name]
         await super().__run__(data)
+    
+    def copy(self, network: "Network", connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "NodeGroupPort":
+        n_node: NodeGroupPort = super().copy(network, connections=connections, requests=requests)
+        n_node.id = self.id
+        return n_node
 
 """
 ========================================================
@@ -690,7 +704,7 @@ class BaseNetwork(VnodeObject):
         lock = asyncio.Lock()
         l = list(self.nodes.keys())
         for n in self.nodes.values():
-            self.task(n.__respond__(NetwortInitedMessage(self, lock, l)))
+            self.task(n.__respond__(NetworkInitedMessage(self, lock, l)))
         if first_task:
             self.task(first_task)
         if not self.loop.is_running():
@@ -730,12 +744,14 @@ class BaseNetwork(VnodeObject):
         else:
             return node in self.nodes.values()
 
+_builtin_node: List[Node] = []
+
 class Network(BaseNetwork):
 
     __slots__ = ["listener", "_last_output"]
 
     def __init__(self, *nodes: Node, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
-        nodes = (_network_start, _network_output, *nodes)
+        nodes += tuple(_builtin_node)
         super().__init__(*nodes, loop=loop)
         self.listener: DefaultDict[str, List[ListenerNode]] = defaultdict(list)
         for n in self.nodes.values():
@@ -802,7 +818,7 @@ class NodeGroupNetwork(Network):
         lock = asyncio.Lock()
         l = list(self.nodes.keys())
         for n in self.nodes.values():
-            n.respond(NetwortInitedMessage(self, lock, l))
+            n.respond(NetworkInitedMessage(self, lock, l))
         return self
 
     async def __aexit__(
@@ -818,13 +834,17 @@ class NodeGroupNetwork(Network):
             self.lock.release()
 
 
+def builtin_node(node: Node) -> Node:
+    _builtin_node.append(node)
+    return node
+
 def node(
-    name: Optional[str] = None,
-    connections: Dict[str, T_Port] = {},
-    requests: Dict[str, T_Port] = {},
-    *,
-    model: bool = False
-) -> Callable[[Callable], Node]:
+        name: Optional[str] = None,
+        connections: Dict[str, T_Port] = {},
+        requests: Dict[str, T_Port] = {},
+        *,
+        model: bool = False
+    ) -> Callable[[Callable], Node]:
     def wrapper(ops: Callable) -> Node:
         if not name:
             _name = ops.__name__
@@ -837,6 +857,23 @@ def node(
 
 def node_model(ops: Callable) -> Node:
     return node(model=True)(ops)
+
+def listener(
+        event: Type[BaseEvent],
+        name: Optional[str] = None,
+        connections: Dict[str, T_Port] = {},
+        *,
+        model: bool = False
+    ) -> Callable[[Callable], ListenerNode]:
+    def wrapper(func: Callable) -> ListenerNode:
+        if not name:
+            _name = func.__name__
+        else:
+            _name = name
+        node = ListenerNode(_name, event, connections=connections, model=model)
+        node.set_ops(func)
+        return node
+    return wrapper
 
 _node_group_id = 0
 
@@ -854,12 +891,12 @@ def node_group_port(name: str, id_: Optional[int] = None) -> Callable[[Callable[
     return wrapper
 
 def node_group(
-    name: Optional[str] = None,
-    connections: Dict[str, T_Port] = {},
-    requests: Dict[str, T_Port] = {},
-    *,
-    model: bool = False
-) -> Callable[[Type[object]], NodeGroup]:
+        name: Optional[str] = None,
+        connections: Dict[str, T_Port] = {},
+        requests: Dict[str, T_Port] = {},
+        *,
+        model: bool = False
+    ) -> Callable[[Type[object]], NodeGroup]:
     def wrapper(cls: Type[object]) -> NodeGroup:
         global _node_group_id
         if not name:
@@ -879,12 +916,40 @@ def network(network: Type[object]) -> Network:
             l.append(v)
     return Network(*l)
 
+__all__ = [
+    # Message
+    "BaseMessage",
+    "InputMessage",
+    "NetworkInitedMessage",
+    "ConnectionRequestMessage",
+    "ConfirmConnectionMessage",
+    "PullRequestMessage",
+    "Message",
+    # Event
+    "BaseEvent",
+    "ExceptionRaisedEvent",
+    "NodeGroupStartingEvent",
+    
+    # Node
+    "NodeMeta",
+    "BaseNode",
+    "Node",
+    "StaticNode",
+    "ListenerNode",
+    "NodeGroup",
+    "NodeGroupPort",
 
-@node("__start__", model=True)
-def _network_start(node_self: Node) -> None:
-    logger.info(f"{node_self.network} starts running.")
+    # Network
+    "BaseNetwork",
+    "Network",
 
-@node("__return__", model=True)
-def _network_output(node_self: Node, input: Any) -> None:
-    #await node_self.network.loop.shutdown_asyncgens()
-    node_self.network.last_output = input
+    # Function
+    "on_message",
+    "builtin_node",
+    "node",
+    "node_model",
+    "listener",
+    "node_group_port",
+    "node_group",
+    "network"
+]
