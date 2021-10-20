@@ -1,15 +1,13 @@
 import asyncio
 import re
 import sys
-from asyncio.coroutines import iscoroutinefunction
 from collections import OrderedDict, defaultdict, deque
 from functools import wraps
 from inspect import signature
 from types import TracebackType
-from typing import (Any, Callable, Coroutine, Deque, Dict, Generator, Iterable, List,
-                    NoReturn, Optional)
+from typing import (Any, Callable, Coroutine, DefaultDict, Deque, Dict,
+                    Iterable, List, NoReturn, Optional)
 from typing import OrderedDict as T_OrderedDict
-from typing import DefaultDict
 from typing import Tuple, Type, TypeVar, Union
 
 from .exceptions import *
@@ -447,7 +445,7 @@ class Node(BaseNode):
             return self
         else:
             return self.copy(network, self.connections, self.requests)
-
+    
     def deliver(self, data: Any) -> None:
         if not self.connections:
             return
@@ -461,6 +459,12 @@ class Node(BaseNode):
     def terminate(self, data: Any = None) -> NoReturn:
         raise NodeTerminatedError(f"Node {self} was terminated by user.", node=self, data=data)
     
+    def set_connections(self, **ports: T_Port) -> None:
+        self.connections.update({k:Port(v) for k, v in ports.items()})
+
+    def set_requests(self, **ports: T_Port) -> None:
+        self.requests.update({k:Port(v) for k, v in ports.items()})
+
     def set_ops(self, ops: Callable) -> None:
         sig = signature(ops).parameters
         self.ports = [n for n in sig if n != "return" and n != NODE_OPS_SELF_REF]
@@ -487,7 +491,7 @@ class Node(BaseNode):
             ):
             args = (self, *args)
 
-        if iscoroutinefunction(self.ops):
+        if asyncio.iscoroutinefunction(self.ops):
             return await self.ops(*args, **kwds)
         else:
             return self.ops(*args, **kwds)

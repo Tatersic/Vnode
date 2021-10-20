@@ -20,4 +20,6 @@ def _network_output(node_self: Node, input: Any) -> None:
 def _network_except(node_self: ListenerNode, event: ExceptionRaisedEvent) -> None:
     logger.error("When the network running, an exception raised.")
     print_exception(event.exception.__class__, event.exception, event.traceback)
-    node_self.network.last_output = None
+    if len(node_self.network.listener[ExceptionRaisedEvent.__name__]) < 2:
+        node_self.network.last_output = None
+
