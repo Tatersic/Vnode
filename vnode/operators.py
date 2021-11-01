@@ -9,7 +9,7 @@ class Operator(VnodeObject):
 
     ops_cahce: Dict[str, "Operator"] = {}
     
-    def __init__(self, name: str, func: Callable[[Any], Callable]) -> None:
+    def __init__(self, name: str, func: Callable[..., Callable]) -> None:
         self.name = name
         self.func = func
         if name in self.ops_cahce:
@@ -29,8 +29,8 @@ class Operator(VnodeObject):
         else:
             return self.__getattribute__(key)
 
-def vnode_operator(name: Optional[str] = None) -> Callable[[Callable[[Any], Callable]], Operator]:
-    def wrapper(func: Callable[[Any], Callable]) -> Operator:
+def vnode_operator(name: Optional[str] = None) -> Callable[[Callable[..., Callable]], Operator]:
+    def wrapper(func: Callable[..., Callable]) -> Operator:
         if not name:
             _name = func.__name__
         else:
@@ -54,6 +54,12 @@ def mul_constant(constant):
 def div_constant(constant):
     def wrapper(num):
         return num / constant
+    return wrapper
+
+@vnode_operator()
+def fma(b, c):
+    def wrapper(a):
+        return (a + b) * c
     return wrapper
 
 class VnodeOpsError(VnodeError):

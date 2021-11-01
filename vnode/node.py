@@ -79,11 +79,11 @@ class NetworkInitedMessage(BaseMessage):
     __slots__ = ["network", "lock", "uninit"]
 
     def __init__(
-        self,
-        net: "BaseNetwork", 
-        lock: asyncio.Lock, 
-        uninit: List[str]
-    ) -> None:
+            self,
+            net: "BaseNetwork", 
+            lock: asyncio.Lock, 
+            uninit: List[str]
+        ) -> None:
         self.network = net
         self.lock = lock
         self.uninit = uninit
@@ -284,12 +284,12 @@ class BaseNode(VnodeObject, metaclass=NodeMeta):
     __slots__ = ["name", "connections", "network"]
 
     def __init__(
-        self,
-        name: str,
-        connections: List[str] = [],
-        *,
-        network: Optional["BaseNetwork"] = None
-    ) -> None:
+            self,
+            name: str,
+            connections: List[str] = [],
+            *,
+            network: Optional["BaseNetwork"] = None
+        ) -> None:
         self.name = name
         self.connections = connections
         self.network = network
@@ -327,14 +327,14 @@ class Node(BaseNode):
     __slots__ = ["requests", "ops", "ports", "data_cache", "model"]
 
     def __init__(
-        self,
-        name: str,
-        connections: Dict[str, T_Port] = {}, 
-        requests: Dict[str, T_Port] = {},
-        *,
-        network: Optional["Network"] = None,
-        model: bool = False
-    ) -> None:
+            self,
+            name: str,
+            connections: Dict[str, T_Port] = {}, 
+            requests: Dict[str, T_Port] = {},
+            *,
+            network: Optional["Network"] = None,
+            model: bool = False
+        ) -> None:
         if not RE_NODE_NAME.match(name):
             raise ValueError("Invalid node name.")
         self.name       = name
@@ -426,11 +426,11 @@ class Node(BaseNode):
                 return await self.__run__(**{k:v.pop() for k, v in self.data_cache.items()})
     
     def copy(
-        self,
-        network: Optional["Network"],
-        connections: Dict[str, T_Port] = {}, 
-        requests: Dict[str, T_Port] = {}
-    ) -> "Node":
+            self,
+            network: Optional["Network"],
+            connections: Dict[str, T_Port] = {}, 
+            requests: Dict[str, T_Port] = {}
+        ) -> "Node":
         n_node = self.__class__(
             self.name, connections, requests, network=network
         )
@@ -485,9 +485,10 @@ class Node(BaseNode):
         if (
                 sig and \
                 list(sig.keys())[0] == NODE_OPS_SELF_REF and (
-                sig[NODE_OPS_SELF_REF].annotation == self.__class__ or 
-                issubclass(self.__class__, sig[NODE_OPS_SELF_REF].annotation) or
-                sig[NODE_OPS_SELF_REF].annotation == empty)
+                    issubclass(self.__class__, sig[NODE_OPS_SELF_REF].annotation) or
+                    sig[NODE_OPS_SELF_REF].annotation   == self.__class__ or 
+                    sig[NODE_OPS_SELF_REF].annotation   == empty
+                )
             ):
             args = (self, *args)
 
@@ -505,14 +506,14 @@ class StaticNode(Node):
     __slots__ = ["data"]
 
     def __init__(
-        self,
-        name: str,
-        requests: Dict[str, T_Port] = {},
-        *,
-        network: Optional["BaseNetwork"] = None,
-        model: bool = False,
-        data: Any = None
-    ) -> None:
+            self,
+            name: str,
+            requests: Dict[str, T_Port] = {},
+            *,
+            network: Optional["BaseNetwork"] = None,
+            model: bool = False,
+            data: Any = None
+        ) -> None:
         if not RE_NODE_NAME.match(name):
             raise ValueError("Invalid node name.")
         self.name       = name
@@ -568,6 +569,54 @@ class StaticNode(Node):
     def set_ops(self, ops: Callable) -> NoReturn:
         raise VnodeValueError("Static node needs no operator.", node=self)
 
+class MirroringNode(Node):
+
+    __slots__ = ["mirroring", "network_offset"]
+
+    def __init__(
+            self, 
+            name: str,
+            origin_node: Union[Node, str],
+            requests: Dict[str, T_Port] = {}, 
+            *, 
+            network: Optional["Network"] = None,
+            offset: int = 0,
+            model: bool = False
+        ) -> None:
+        if not isinstance(origin_node, str):
+            origin_node = origin_node.name
+        self.mirroring = origin_node
+        self.network_offset = offset
+        super().__init__(name, connections={}, requests=requests, network=network, model=model)
+
+    @on_message(ConnectionRequestMessage, PullRequestMessage)
+    def __respond_connection(self, msg: BaseMessage) -> None:
+        raise VnodeValueError("Listener cannot connect to othor node.", node=self)
+
+    @on_message(Message)
+    def __respond_message(self, msg: Message) -> None:
+        net = self.network
+        for i in range(self.network_offset):
+            if not isinstance(net, NodeGroupNetwork):
+                raise VnodeNetworkError(f"Fail to mirror '{self.mirroring}'.")
+            net = net.node_group.network
+        net[self.mirroring].respond(msg)
+
+    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "Node":
+        if connections:
+            raise VnodeValueError("Mirroring node should not connect to other nodes.")
+        ans: MirroringNode = super().copy(network, requests=requests)
+        ans.mirroring = self.mirroring
+        ans.network_offset = self.network_offset
+        return ans
+
+    def deliver(self, data: Any) -> None:
+        pass
+
+    def set_ops(self, ops: Callable) -> NoReturn:
+        raise VnodeValueError("Static node needs no operator.", node=self)
+
+
 class ListenerNode(Node):
 
     __slots__ = ["event"]
@@ -590,17 +639,13 @@ class ListenerNode(Node):
         else:
             await super().__respond__(msg)
 
-    @on_message(ConfirmConnectionMessage)
-    def __respond_confirm_connection(self, msg: ConfirmConnectionMessage) -> None:
-        raise VnodeValueError("Listener cannot be connected.", node=self)
-    
-    @on_message(Message)
-    def __respond_message(self, msg: Message) -> None:
+    @on_message(ConfirmConnectionMessage, Message)
+    def __respond_connection(self, msg: BaseMessage) -> None:
         raise VnodeValueError("Listener cannot be connected.", node=self)
     
     def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "ListenerNode":
         if requests:
-            raise VnodeValueError("")
+            raise VnodeValueError("Listener node should not be connected.")
         n_node: ListenerNode = super().copy(network, connections=connections, requests=requests)
         n_node.event = self.event
         return n_node
@@ -614,14 +659,14 @@ class NodeGroup(Node):
     __slots__ = ["ins_network", "subordinate_nodes"]
 
     def __init__(
-        self, 
-        name: str, 
-        connections: Dict[str, T_Port] = {}, 
-        requests: Dict[str, T_Port] = {}, 
-        *, 
-        network: Optional["Network"] = None, 
-        model: bool = False
-    ) -> None:
+            self, 
+            name: str, 
+            connections: Dict[str, T_Port] = {}, 
+            requests: Dict[str, T_Port] = {}, 
+            *, 
+            network: Optional["Network"] = None, 
+            model: bool = False
+        ) -> None:
         self.subordinate_nodes: Dict[str, Node] = {}
         self.ports: List[str] = []
         super().__init__(
@@ -697,10 +742,10 @@ class BaseNetwork(VnodeObject):
     nodes: T_OrderedDict[str, BaseNode]
 
     def __init__(
-        self,
-        *nodes: BaseNode,
-        loop: Optional[asyncio.AbstractEventLoop] = None
-    ) -> None:
+            self,
+            *nodes: BaseNode,
+            loop: Optional[asyncio.AbstractEventLoop] = None
+        ) -> None:
         if loop:
             self.loop: asyncio.AbstractEventLoop = loop
         else:
@@ -810,11 +855,12 @@ class Network(BaseNetwork):
 
 class NodeGroupNetwork(Network):
 
-    __slots__ = ["lock"]
+    __slots__ = ["lock", "node_group"]
 
-    def __init__(self, *nodes: Node, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+    def __init__(self, node_group: NodeGroup, *nodes: Node, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         super().__init__(*nodes, loop=loop)
         self.lock = asyncio.Lock(loop=self.loop)
+        self.node_group = node_group
 
     def _init(self, first_task: Optional[Coroutine] = None) -> None:
         self.activated = True
