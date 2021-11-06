@@ -4,7 +4,7 @@ import sys
 from collections import OrderedDict, defaultdict, deque
 from copy import copy
 from functools import wraps
-from inspect import signature
+from inspect import Signature, signature
 from types import TracebackType
 from typing import (Any, Callable, Coroutine, DefaultDict, Deque, Dict,
                     Iterable, List, NoReturn, Optional)
@@ -319,7 +319,10 @@ class BaseNode(VnodeObject, metaclass=NodeMeta):
         return 
 
     def __str__(self) -> str:
-        return f"<node {self.name} in {self.network}>"
+        if self.network:
+            return f"<node {self.name} in {self.network}>"
+        else:
+            return f"<node {self.name} without network>"
     
     __repr__ = __str__
 
@@ -328,7 +331,7 @@ class Node(BaseNode):
     Normal nodes which we used.
     """
 
-    __slots__ = ["requests", "ops", "ports", "data_cache", "model"]
+    __slots__ = ["requests", "ops", "ports", "data_cache", "default_data", "model"]
 
     def __init__(
             self,
@@ -350,6 +353,7 @@ class Node(BaseNode):
             raise VnodeNetworkError("Node models should not be linked to a network.", net=network)
         self.network    = network
         self.data_cache: Dict[str, Deque[Any]] = defaultdict(deque)
+        self.default_data: Dict[str, Any] = {}
 
     async def __respond__(self, msg: BaseMessage) -> None:
         handler = self.__class__._get_message_handler(msg)
@@ -426,8 +430,10 @@ class Node(BaseNode):
                 if not self.data_cache[p.name]:
                     m = PullRequestMessage(self)
                     await m.aio_send(n)
-            if len(self.data_cache) == len(self.ports) and all((self.data_cache.values())):
-                return await self.__run__(**{k:v.pop() for k, v in self.data_cache.items()})
+            if all((self.data_cache[p] for p in self.ports if not p in self.default_data)):
+                return await self.__run__(
+                        **{k:v.popleft() for k, v in self.data_cache.items()}
+                    )
     
     def copy(
             self,
@@ -471,7 +477,12 @@ class Node(BaseNode):
 
     def set_ops(self, ops: Callable) -> None:
         sig = signature(ops).parameters
-        self.ports = [n for n in sig if n != "return" and n != NODE_OPS_SELF_REF]
+        self.ports = []
+        for n, arg in sig.items():
+            if n == "return" or n == NODE_OPS_SELF_REF:
+                self.ports.append(n)
+                if arg.default != Signature.empty:
+                    self.default_data[n] = arg.default
         if not self.ports:
             self.ports.append("@void")
         for p in self.requests.values():
@@ -483,15 +494,13 @@ class Node(BaseNode):
         return self.network.last_output
 
     async def __run__(self, *args, **kwds) -> Any:
-        sig = signature(self.ops)
-        empty = sig.empty
-        sig = sig.parameters
+        sig = signature(self.ops).parameters
         if (
                 sig and \
                 list(sig.keys())[0] == NODE_OPS_SELF_REF and (
                     issubclass(self.__class__, sig[NODE_OPS_SELF_REF].annotation) or
                     sig[NODE_OPS_SELF_REF].annotation   == self.__class__ or 
-                    sig[NODE_OPS_SELF_REF].annotation   == empty
+                    sig[NODE_OPS_SELF_REF].annotation   == Signature.empty
                 )
             ):
             args = (self, *args)
@@ -500,6 +509,12 @@ class Node(BaseNode):
             return await self.ops(*args, **kwds)
         else:
             return self.ops(*args, **kwds)
+    
+    def __str__(self) -> str:
+        if not self.model:
+            return super().__str__()
+        else:
+            return f"<node model {self.name}>"
 
 class StaticNode(Node):
     """
@@ -690,6 +705,8 @@ class NodeGroup(Node):
             NodeGroupStartingEvent(self, data=data).broadcast(self.ins_network)
         return self.ins_network.last_output
 
+
+
 class NodeGroupPort(ListenerNode):
 
     __slots__ = ["id"]
@@ -843,6 +860,8 @@ class NodeGroupNetwork(Network):
         self.node_group = node_group
 
     def _init(self, first_task: Optional[Coroutine] = None) -> None:
+        if not self.loop.is_running():
+            return super()._init(first_task)
         self.activated = True
         if first_task:
             self.task(first_task)
@@ -968,6 +987,9 @@ __all__ = [
     "BaseEvent",
     "ExceptionRaisedEvent",
     "NodeGroupStartingEvent",
+
+    # Port
+    "Port",
     
     # Node
     "NodeMeta",

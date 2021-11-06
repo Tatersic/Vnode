@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Iterable, Optional, Union
 
 from .node import VnodeObject, Node
 from .exceptions import VnodeError
@@ -23,11 +23,8 @@ class Operator(VnodeObject):
         node.set_ops(func)
         return node
     
-    def __getattr__(self, key: str) -> "Operator":
-        if key in self.ops_cahce:
-            return self.ops_cahce[key]
-        else:
-            return self.__getattribute__(key)
+    def __class_getitem__(cls, key: str) -> "Operator":
+        return cls.ops_cahce[key]
 
 def vnode_operator(name: Optional[str] = None) -> Callable[[Callable[..., Callable]], Operator]:
     def wrapper(func: Callable[..., Callable]) -> Operator:
@@ -60,6 +57,12 @@ def div_constant(constant):
 def fma(b, c):
     def wrapper(a):
         return (a + b) * c
+    return wrapper
+
+@vnode_operator()
+def format_str(string: str):
+    def wrapper(args: Iterable, kwds: dict):
+        return string.format(*args, **kwds)
     return wrapper
 
 class VnodeOpsError(VnodeError):
