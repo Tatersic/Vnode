@@ -2,6 +2,7 @@ import asyncio
 import re
 import sys
 from collections import OrderedDict, defaultdict, deque
+from copy import copy
 from functools import wraps
 from inspect import signature
 from types import TracebackType
@@ -307,7 +308,10 @@ class BaseNode(VnodeObject, metaclass=NodeMeta):
         return self
     
     def copy(self, network: Optional["BaseNetwork"], connections: List[str] = []) -> "BaseNode":
-        return BaseNode(self.name, connections, network=network)
+        cp = copy(self)
+        cp.network = network
+        cp.connections = connections
+        return cp
     
     def __call__(self, *args: Any, **kwds: Any) -> None:
         msg = InputMessage(*args, **kwds)
@@ -430,11 +434,11 @@ class Node(BaseNode):
             network: Optional["Network"],
             connections: Dict[str, T_Port] = {}, 
             requests: Dict[str, T_Port] = {}
-        ) -> "Node":
-        n_node = self.__class__(
-            self.name, connections, requests, network=network
-        )
-        n_node.set_ops(self.ops)
+        ):
+        n_node = copy(self)
+        n_node.network = network
+        n_node.connections = connections
+        n_node.requests = requests
         return n_node
     
     def join(self, network: "Network") -> "Node":
@@ -546,16 +550,6 @@ class StaticNode(Node):
     async def __respond_message(self, msg: Message) -> None:
         self.data = msg.data
     
-    def copy(
-        self,
-        network: Optional["Network"],
-        connections: Dict[str, T_Port] = {}
-    ) -> "StaticNode":
-        n_node = self.__class__(
-            self.name, connections, network=network
-        )
-        return n_node
-    
     def join(self, network: "Network") -> "StaticNode":
         if not self.model:
             self.network = network
@@ -602,13 +596,10 @@ class MirroringNode(Node):
             net = net.node_group.network
         net[self.mirroring].respond(msg)
 
-    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "Node":
+    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}):
         if connections:
             raise VnodeValueError("Mirroring node should not connect to other nodes.")
-        ans: MirroringNode = super().copy(network, requests=requests)
-        ans.mirroring = self.mirroring
-        ans.network_offset = self.network_offset
-        return ans
+        return super().copy(network, connections, requests)
 
     def deliver(self, data: Any) -> None:
         pass
@@ -643,12 +634,10 @@ class ListenerNode(Node):
     def __respond_connection(self, msg: BaseMessage) -> None:
         raise VnodeValueError("Listener cannot be connected.", node=self)
     
-    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "ListenerNode":
+    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}):
         if requests:
             raise VnodeValueError("Listener node should not be connected.")
-        n_node: ListenerNode = super().copy(network, connections=connections, requests=requests)
-        n_node.event = self.event
-        return n_node
+        return super().copy(network, connections, requests)
 
     async def __run__(self, event: BaseEvent) -> None:
         ans = await super().__run__(event)
@@ -689,15 +678,6 @@ class NodeGroup(Node):
     def set_ops(self, ops: Callable) -> NoReturn:
         raise VnodeValueError("Node group needs no operator.", node=self)
     
-    def copy(self, network: Optional["Network"], connections: Dict[str, T_Port] = {}, requests: Dict[str, T_Port] = {}) -> "NodeGroup":
-        n_node: NodeGroup = super().copy(network, connections=connections, requests=requests)
-        l_sn = []
-        for n in self.subordinate_nodes.values():
-            ns_node = n.copy(None, n.connections, n.requests)
-            l_sn.append(ns_node)
-        n_node.add_nodes(*l_sn)
-        return n_node
-
     async def __run__(self, *args, **kwds) -> Any:
         data = {}
         for k, v in zip(self.ports, args):
