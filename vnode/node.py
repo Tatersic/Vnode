@@ -432,7 +432,7 @@ class Node(BaseNode):
                     await m.aio_send(n)
             if all((self.data_cache[p] for p in self.ports if not p in self.default_data)):
                 return await self.__run__(
-                        **{k:v.popleft() for k, v in self.data_cache.items()}
+                        **{k:v.pop() for k, v in self.data_cache.items()}
                     )
     
     def copy(
@@ -443,8 +443,9 @@ class Node(BaseNode):
         ):
         n_node = copy(self)
         n_node.network = network
-        n_node.connections = connections
-        n_node.requests = requests
+        n_node.connections = connections.copy()
+        n_node.requests = requests.copy()
+        n_node.model = False
         return n_node
     
     def join(self, network: "Network") -> "Node":
@@ -480,9 +481,10 @@ class Node(BaseNode):
         self.ports = []
         for n, arg in sig.items():
             if n == "return" or n == NODE_OPS_SELF_REF:
-                self.ports.append(n)
-                if arg.default != Signature.empty:
-                    self.default_data[n] = arg.default
+                continue
+            self.ports.append(n)
+            if arg.default != Signature.empty:
+                self.default_data[n] = arg.default
         if not self.ports:
             self.ports.append("@void")
         for p in self.requests.values():
@@ -678,8 +680,7 @@ class NodeGroup(Node):
             network=network, model=model)
 
     def join(self, network: "Network") -> "Node":
-        self.ins_network = NodeGroupNetwork(loop=network.loop)
-        self.ins_network.add(*self.subordinate_nodes.values())
+        self.build_ins_network(network.loop)
         return super().join(network)
 
     def add_nodes(self, *nodes: Node) -> None:
@@ -689,6 +690,10 @@ class NodeGroup(Node):
                 self.ports.insert(n.id, n.name)
         if hasattr(self, "ins_network"):
             self.ins_network.add(*nodes)
+    
+    def build_ins_network(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.ins_network = NodeGroupNetwork(self, loop=loop)
+        self.ins_network.add(*self.subordinate_nodes.values())
     
     def set_ops(self, ops: Callable) -> NoReturn:
         raise VnodeValueError("Node group needs no operator.", node=self)
@@ -701,10 +706,11 @@ class NodeGroup(Node):
         if len(data) != len(self.ports):
             raise VnodeValueError("Unmatch data.", node=self)
 
+        if not hasattr(self, "ins_network"):
+            self.build_ins_network(asyncio.get_running_loop())
         async with self.ins_network:
             NodeGroupStartingEvent(self, data=data).broadcast(self.ins_network)
         return self.ins_network.last_output
-
 
 
 class NodeGroupPort(ListenerNode):
@@ -935,8 +941,8 @@ def listener(
 
 _node_group_id = 0
 
-def node_group_port(name: str, id_: Optional[int] = None) -> Callable[[Callable[[Any], Any]], NodeGroupPort]:
-    def wrapper(func: Callable[[Any], Any]) -> NodeGroupPort:
+def node_group_port(name: str, id_: Optional[int] = None) -> Callable[[Callable[..., Any]], NodeGroupPort]:
+    def wrapper(func: Callable[..., Any]) -> NodeGroupPort:
         global _node_group_id
         if not id_:
             id = _node_group_id
